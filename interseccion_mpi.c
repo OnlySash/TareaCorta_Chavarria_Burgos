@@ -54,8 +54,60 @@ void *hilo_carril(void *dato_del_carril) {
     cruzados[numero_de_carril]++;
     //sem_post(&mutex_contadores);
   }
-
   return NULL;
+}
+
+void reporte_final(){
+    double fin = MPI_Wtime();
+    printf("======== REPORTE FINAL ======== \n\n");
+    printf("Vehiculos cruzados: %d\n", vehiculos_cruzados);
+    printf("Accidentes: %d\n", accidentes);
+    printf("Tiempo de simulacion: %.3f seg\n\n", fin - inicio);
+    printf("Estadisticas por carril: \n")
+    printf("Carril      Vehiculos   Espera acum. \n")
+    printf("Norte      %d  %f \n", cruzados[0], cruzados[0]); 
+    printf("Sur:        %d  %f \n", cruzados[1], cruzados[1]);
+    printf("Este        %d  %f \n", cruzados[2] ,cruzados[2]);
+    printf("Oeste:      %d  %f \n\n", cruzados[3], cruzados[3]);
+        
+    printf("Funciones MPI usadas: MPI_Send, MPI_Recv, MPI_Bcast, MPI_Barrier, MPI_Reduce, MPI_Gather");
+} 
+
+void coordinador(){
+    if (size != N_CARRILES +1){
+    if (rank == 0)
+    {
+        prinf("Mayor cantidad de ranks");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    }
+  double inicio = MPI_Wtime();
+
+  if (rank == MASTER) {
+        //Inicializar desde rank 0
+    }
+
+    MPI_Bcast(dna_chain, params.dna_length, MPI_CHAR, MASTER, MPI_COMM_WORLD);
+   
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // process_data;
+    // Impresiones por rank
+
+    //mpi_recv
+    if (rank == MASTER) {
+        //Recibir solicitudes de cruce
+    }
+
+    //para impresiones locales, sincrinizar resultados
+    MPI_Gather(local_results, params.k_patterns * 2, MPI_INT, 
+               all_results,   params.k_patterns * 2, MPI_INT, 
+               MASTER, MPI_COMM_WORLD);
+
+    if (rank == MASTER) {
+        //en el rank 0
+        reporte_final();
+      }
 }
 
 void crear_mpi(){
@@ -67,49 +119,7 @@ void crear_mpi(){
   //Tamaño total del rank
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  for (int i = 0; i < N_CARRILES; i++) {
-    cola[i] = 0;
-    cruzados[i] = 0;
-    ids_s [i] = i;
-  }
-  
-  double inicio = MPI_Wtime();
-
-  if (rank == MASTER) {
-        //Inicializar desde rank 0
-    }
-
-    MPI_Bcast(dna_chain, params.dna_length, MPI_CHAR, MASTER, MPI_COMM_WORLD);
-    for (int p_i = 0; p_i < params.k_patterns; p_i++) {
-        MPI_Bcast(patterns[p_i].pattern, params.pattern_length + 1, MPI_CHAR, MASTER, MPI_COMM_WORLD);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    // process_data;
-    // Impresiones por rank
-    compute_mpi_chunks(rank, size, params.dna_length, &process_data);
-
-    //para impresiones locales
-    MPI_Gather(local_results, params.k_patterns * 2, MPI_INT, 
-               all_results,   params.k_patterns * 2, MPI_INT, 
-               MASTER, MPI_COMM_WORLD);
-
-    if (rank == MASTER) {
-        //en el rank 0
-        double fin = MPI_Wtime();
-        printf("======== REPORTE FINAL ======== \n\n");
-        printf("Vehiculos cruzados: %d\n", vehiculos_cruzados);
-        printf("Accidentes: %d\n", accidentes);
-        printf("Tiempo de simulacion: %.3f seg\n\n", fin - inicio);
-        printf("Estadisticas por carril: \n")
-        printf("Carril      Vehiculos   Espera acum. \n")
-        printf("Norte      %d  %f \n", cruzados[0], cruzados[0]); 
-        printf("Sur:        %d  %f \n", cruzados[1], cruzados[1]);
-        printf("Este        %d  %f \n", cruzados[2] ,cruzados[2]);
-        printf("Oeste:      %d  %f \n\n", cruzados[3], cruzados[3]);
-        
-        printf("Funciones MPI usadas: MPI_Send, MPI_Recv, MPI_Bcast, MPI_Barrier, MPI_Reduce, MPI_Gather");
-      }
+  coordinador();
 
   MPI_Finalize();
   //free variables
