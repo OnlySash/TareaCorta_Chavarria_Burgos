@@ -1,8 +1,10 @@
 //mpicc -Wall -Wextra -std=c11
+#define _DEFAULT_SOURCE // Esto permite que usleep() funcione bajo el estándar c11
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>       // Agregamos esto para arreglar el error de time()
 
 #define N_CARRILES 4
 #define N_VEHICULOS 10
@@ -37,72 +39,95 @@ void reporte_final(double tiempo_total , int carros_cruzados, int accidentes, me
     printf("Funciones MPI usadas: MPI_Send, MPI_Recv, MPI_Bcast, MPI_Barrier, MPI_Reduce, MPI_Gather");
 } 
 
+
 void hilo_carril(int rank, int n_carros) {
-  //unsigned int semilla = rank + time(NULL);
+    srand(time(NULL) + rank);
 
-  //Crear espacio para nombre y enviarlo
-  //char nombre_local[20];
-  //sprintf(nombre_local, "%s-%d", nombres[rank]);
-  MPI_Send((void*)nombres[rank], 20, MPI_CHAR, MASTER, TAG_MENSAJE, MPI_COMM_WORLD);
-  printf("[%s] listo. Esperando autorizacion para cruzar. \n", nombres[rank]);
+    MPI_Send((void*)nombres[rank], 20, MPI_CHAR, MASTER, TAG_MENSAJE, MPI_COMM_WORLD);
+    printf("[%s] listo. Esperando autorizacion para cruzar.\n", nombres[rank]);
 
-  /*int vehiculos_cruzados_local = 0;
-  int accidentes_local = 0;
-  int en_cruce_local = 0;
-  
-  for (int i = 1; i <= N_VEHICULOS; i++) {
-    cola[numero_de_carril]++;
+    MPI_Barrier(MPI_COMM_WORLD);
 
-    // aqui es donde se da la Race condition en Fase 1
-    //sem_wait(&semaforo_cruce);
-    printf("[%s] cruzando\n", nombre);
+    int respuesta;
+    for (int i = 1; i <= n_carros; i++) {
+        int id_vehiculo = i;
 
-    //La variable en_cruce_sem ya no tiene forma de ser 1
-    if (en_cruce_sem == 1) {
-      accidentes_sem++;
-      printf("ACCIDENTE detectado con %s\n", nombre);
+        MPI_Send(&id_vehiculo, 1, MPI_INT, MASTER, TAG_SOLICITUD, MPI_COMM_WORLD);
+        MPI_Recv(&respuesta, 1, MPI_INT, MASTER, TAG_PERMISO, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        
+        int tiempo_cruce = 2000 + rand() % 4000;
+        usleep(tiempo_cruce);
+        
+        MPI_Send(&id_vehiculo, 1, MPI_INT, MASTER, TAG_CRUCE_FIN, MPI_COMM_WORLD);
     }
 
-    int time = 2500 + rand_r(&semilla) % 3000;
-    en_cruce_sem = 1; //marcar que hay un vehiculo en el cruce (sin proteccion)
-    usleep(time);
-    en_cruce_sem = 0;
-    printf("[%s] cruzo\n", nombre);
-    //sem_post(&semaforo_cruce);
-
-    //sem_wait(&mutex_contadores);
-    cola[numero_de_carril]--;
-    vehiculos_cruzados_sem++;
-    cruzados[numero_de_carril]++;
-    //sem_post(&mutex_contadores);
-  }
-  return NULL;*/
+    int fin_cruce = -1;
+    MPI_Send(&fin_cruce, 1, MPI_INT, MASTER, TAG_SOLICITUD, MPI_COMM_WORLD);
 }
 
-void coordinador(int n_carros, int rank){
-  double inicio = MPI_Wtime();  
-   
+typedef struct {
+  int carriles_activos;
+  int cruce_libre;
+  int cola_espera[N_CARRILES * N_VEHICULOS];
+  int indice_frente;
+  int indice_final;
+} EstadoCruce;
+
+void procesar_solicitud(int carril, int id, EstadoCruce *estado) {
+  int permiso = 1;
+  if (id == -1) {
+    estado->carriles_activos--;
+  } else if (estado->cruce_libre) {
+    estado->cruce_libre = 0;
+    printf("[%s-%03d] - solicita cruce\n", nombres[carril], id);
+    MPI_Send(&permiso, 1, MPI_INT, carril, TAG_PERMISO, MPI_COMM_WORLD);
+    printf("[Coordinador] %s-%03d autorizado. Cruce OCUPADO.\n", nombres[carril], id);
+  } else {
+    estado->cola_espera[estado->indice_final++] = carril;
+    int esperando = estado->indice_final - estado->indice_frente;
+    printf("[%s-%03d] - solicita cruce (en cola: %d esperando)\n", nombres[carril], id, esperando);
+  }
+}
+
+void procesar_fin_cruce(int carril, int id, EstadoCruce *estado) {
+  int permiso = 1;
+  printf("[%s-%03d] ✓ cruce completado. Cruce LIBRE.\n", nombres[carril], id);
+  
+  if (estado->indice_frente < estado->indice_final) {
+    int siguiente_carril = estado->cola_espera[estado->indice_frente++];
+    MPI_Send(&permiso, 1, MPI_INT, siguiente_carril, TAG_PERMISO, MPI_COMM_WORLD);
+    printf("[Coordinador] %s autorizado (era el siguiente en cola).\n", nombres[siguiente_carril]);
+  } else {estado->cruce_libre = 1;}
+}
+
+void coordinador(int n_carros, int rank) {
   for (int i = 1; i <= N_CARRILES; i++)
   {
     char recibido[20];
     MPI_Recv(recibido, 20, MPI_CHAR, i, TAG_MENSAJE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   }
-  if (rank == MASTER) {
-        //Inicializar desde rank 0
-    }
-   
-    //mpi_recv
-    if (rank == MASTER) {
-        //Recibir solicitudes de cruce
-    }
+  
+  MPI_Barrier(MPI_COMM_WORLD);
+  double inicio = MPI_Wtime();
 
-    if (rank == MASTER) {
-        //en el rank 0
-        double fin = MPI_Wtime();
-        //tiempo total
-        //reporte_final();
-      }
+  EstadoCruce estado = {N_CARRILES, 1, {0}, 0, 0};
+  int id;
+  MPI_Status estado_mpi;
+
+  while (estado.carriles_activos > 0 || !estado.cruce_libre) {
+    MPI_Recv(&id, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &estado_mpi);
+    
+    if (estado_mpi.MPI_TAG == TAG_SOLICITUD) {
+      procesar_solicitud(estado_mpi.MPI_SOURCE, id, &estado);
+    } 
+    else if (estado_mpi.MPI_TAG == TAG_CRUCE_FIN) {
+      procesar_fin_cruce(estado_mpi.MPI_SOURCE, id, &estado);
+    }
+  }
+
+  printf("\nTiempo total: %.3f s\n", MPI_Wtime() - inicio);
 }
+
 
 void crear_mpi(int argc, char *argv[]){
   //Fase 1, base
